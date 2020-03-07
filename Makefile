@@ -489,6 +489,7 @@ test-all-valgrind: test-build
 test-all-suites: | clear-stalled test-build bench-addons-build doc-only ## Run all test suites.
 	$(PYTHON) tools/test.py $(PARALLEL_ARGS) --mode=$(BUILDTYPE_LOWER) test/*
 
+# CI_* variables should be kept synchronized with the ones in vcbuild.bat
 CI_NATIVE_SUITES ?= addons js-native-api node-api
 CI_JS_SUITES ?= default
 ifeq ($(node_use_openssl), false)
@@ -745,7 +746,7 @@ $(LINK_DATA): $(wildcard lib/*.js) tools/doc/apilinks.js
 	$(call available-node, $(gen-apilink))
 
 out/doc/api/%.json out/doc/api/%.html: doc/api/%.md tools/doc/generate.js \
-	tools/doc/html.js tools/doc/json.js tools/doc/apilinks.js | $(LINK_DATA)
+	tools/doc/markdown.js tools/doc/html.js tools/doc/json.js tools/doc/apilinks.js | $(LINK_DATA)
 	$(call available-node, $(gen-api))
 
 out/doc/api/all.html: $(apidocs_html) tools/doc/allhtml.js \
@@ -841,6 +842,7 @@ endif
 endif
 endif
 endif
+endif
 ifeq ($(DESTCPU),x64)
 ARCH=x64
 else
@@ -863,7 +865,6 @@ ifeq ($(DESTCPU),s390x)
 ARCH=s390x
 else
 ARCH=x86
-endif
 endif
 endif
 endif
@@ -923,12 +924,12 @@ endif
 .PHONY: release-only
 release-only: check-xz
 	@if [ "$(DISTTYPE)" = "release" ] && `grep -q REPLACEME doc/api/*.md`; then \
-		echo 'Please update REPLACEME in Added: tags in doc/api/*.md (See doc/releases.md)' ; \
+		echo 'Please update REPLACEME in Added: tags in doc/api/*.md (See doc/guides/releases.md)' ; \
 		exit 1 ; \
 	fi
 	@if [ "$(DISTTYPE)" = "release" ] && \
 		`grep -q DEP...X doc/api/deprecations.md`; then \
-		echo 'Please update DEP...X in doc/api/deprecations.md (See doc/releases.md)' ; \
+		echo 'Please update DEP...X in doc/api/deprecations.md (See doc/guides/releases.md)' ; \
 		exit 1 ; \
 	fi
 	@if [ "$(shell git status --porcelain | egrep -v '^\?\? ')" = "" ]; then \
@@ -1031,7 +1032,6 @@ $(TARBALL): release-only $(NODE_EXE) doc
 	$(RM) -r $(TARNAME)/deps/v8/samples
 	$(RM) -r $(TARNAME)/deps/v8/tools/profviz
 	$(RM) -r $(TARNAME)/deps/v8/tools/run-tests.py
-	$(RM) -r $(TARNAME)/deps/zlib/contrib # too big, unused
 	$(RM) -r $(TARNAME)/doc/images # too big
 	$(RM) -r $(TARNAME)/test*.tap
 	$(RM) -r $(TARNAME)/tools/cpplint.py
@@ -1042,6 +1042,7 @@ $(TARBALL): release-only $(NODE_EXE) doc
 	$(RM) -r $(TARNAME)/tools/osx-pkg.pmdoc
 	find $(TARNAME)/deps/v8/test/* -type d ! -regex '.*/test/torque$$' | xargs $(RM) -r
 	find $(TARNAME)/deps/v8/test -type f ! -regex '.*/test/torque/.*' | xargs $(RM)
+	find $(TARNAME)/deps/zlib/contrib/* -type d ! -regex '.*/contrib/optimizations$$' | xargs $(RM) -r
 	find $(TARNAME)/ -name ".eslint*" -maxdepth 2 | xargs $(RM)
 	find $(TARNAME)/ -type l | xargs $(RM) # annoying on windows
 	tar -cf $(TARNAME).tar $(TARNAME)
@@ -1164,6 +1165,7 @@ bench-addons-clean:
 
 .PHONY: lint-md-rollup
 lint-md-rollup:
+	$(RM) tools/.*mdlintstamp
 	cd tools/node-lint-md-cli-rollup && npm install
 	cd tools/node-lint-md-cli-rollup && npm run build-node
 
@@ -1176,27 +1178,22 @@ lint-md-clean:
 lint-md-build:
 	$(warning "Deprecated no-op target 'lint-md-build'")
 
-LINT_MD_DOC_FILES = $(shell find doc -type f -name '*.md')
-run-lint-doc-md = tools/lint-md.js -q -f $(LINT_MD_DOC_FILES)
-# Lint all changed markdown files under doc/
-tools/.docmdlintstamp: $(LINT_MD_DOC_FILES)
-	@echo "Running Markdown linter on docs..."
-	@$(call available-node,$(run-lint-doc-md))
-	@touch $@
+ifeq ("$(wildcard tools/.mdlintstamp)","")
+    LINT_MD_NEWER =
+else
+    LINT_MD_NEWER = -newer tools/.mdlintstamp
+endif
 
-LINT_MD_TARGETS = src lib benchmark test tools/doc tools/icu
-LINT_MD_ROOT_DOCS := $(wildcard *.md)
-LINT_MD_MISC_FILES := $(shell find $(LINT_MD_TARGETS) -type f \
-	! -path '*node_modules*' ! -path 'test/fixtures/*' -name '*.md') \
-	$(LINT_MD_ROOT_DOCS)
-run-lint-misc-md = tools/lint-md.js -q -f $(LINT_MD_MISC_FILES)
-# Lint other changed markdown files maintained by us
-tools/.miscmdlintstamp: $(LINT_MD_MISC_FILES)
-	@echo "Running Markdown linter on misc docs..."
-	@$(call available-node,$(run-lint-misc-md))
+LINT_MD_TARGETS = doc src lib benchmark test tools/doc tools/icu $(wildcard *.md)
+LINT_MD_FILES = $(shell find $(LINT_MD_TARGETS) -type f \
+	! -path '*node_modules*' ! -path 'test/fixtures/*' -name '*.md' \
+	$(LINT_MD_NEWER))
+run-lint-md = tools/lint-md.js -q -f --no-stdout $(LINT_MD_FILES)
+# Lint all changed markdown files maintained by us
+tools/.mdlintstamp: $(LINT_MD_FILES)
+	@echo "Running Markdown linter..."
+	@$(call available-node,$(run-lint-md))
 	@touch $@
-
-tools/.mdlintstamp: tools/.miscmdlintstamp tools/.docmdlintstamp
 
 .PHONY: lint-md
 # Lints the markdown documents maintained by us in the codebase.
